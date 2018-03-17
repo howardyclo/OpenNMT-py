@@ -32,13 +32,18 @@ def get_vocabs(dict_file):
 
 def get_embeddings(file):
     embs = dict()
+    miss_count = 0
+    
     for l in open(file, 'rb').readlines():
         l_split = l.decode('utf8').strip().split()
         if len(l_split) == 2:
             continue
-        embs[l_split[0]] = [float(em) for em in l_split[1:]]
-    print("Got {} embeddings from {}".format(len(embs), file))
-
+        try:
+            embs[l_split[0]] = [float(em) for em in l_split[1:]]
+        except: miss_count += 1
+            
+    print("Got {} embeddings from {} (missing: {})".format(len(embs), file, miss_count))
+    
     return embs
 
 
