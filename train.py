@@ -70,6 +70,10 @@ if opt.exp_host != "":
         cc.remove_experiment(opt.exp)
     experiment = cc.create_experiment(opt.exp)
 
+if opt.tensorboard:
+    from tensorboardX import SummaryWriter
+    writer = SummaryWriter(opt.tensorboard_log_dir, comment="Onmt")
+
 
 def report_func(epoch, batch, num_batches,
                 start_time, lr, report_stats):
@@ -91,6 +95,10 @@ def report_func(epoch, batch, num_batches,
         report_stats.output(epoch, batch + 1, num_batches, start_time)
         if opt.exp_host:
             report_stats.log("progress", experiment, lr)
+        if opt.tensorboard:
+            # Log the progress using the number of batches on the x-axis.
+            report_stats.log_tensorboard(
+                "progress", writer, lr, epoch * num_batches + batch)
         report_stats = onmt.Statistics()
 
     return report_stats
@@ -168,8 +176,18 @@ def make_dataset_iter(datasets, fields, opt, is_train=True):
     batch_size = opt.batch_size if is_train else opt.valid_batch_size
     batch_size_fn = None
     if is_train and opt.batch_type == "tokens":
+        global max_src_in_batch, max_tgt_in_batch
+
         def batch_size_fn(new, count, sofar):
-            return sofar + max(len(new.tgt), len(new.src)) + 1
+            global max_src_in_batch, max_tgt_in_batch
+            if count == 1:
+                max_src_in_batch = 0
+                max_tgt_in_batch = 0
+            max_src_in_batch = max(max_src_in_batch,  len(new.src) + 2)
+            max_tgt_in_batch = max(max_tgt_in_batch,  len(new.tgt) + 1)
+            src_elements = count * max_src_in_batch
+            tgt_elements = count * max_tgt_in_batch
+            return max(src_elements, tgt_elements)
 
     device = opt.gpuid[0] if opt.gpuid else -1
 
@@ -177,7 +195,7 @@ def make_dataset_iter(datasets, fields, opt, is_train=True):
                            device, is_train)
 
 
-def make_loss_compute(model, tgt_vocab, opt):
+def make_loss_compute(model, tgt_vocab, opt, train=True):
     """
     This returns user-defined LossCompute object, which is used to
     compute loss in train/validate process. You can implement your
@@ -190,7 +208,7 @@ def make_loss_compute(model, tgt_vocab, opt):
     else:
         compute = onmt.Loss.NMTLossCompute(
             model.generator, tgt_vocab,
-            label_smoothing=opt.label_smoothing)
+            label_smoothing=opt.label_smoothing if train else 0.0)
 
     if use_gpu(opt):
         compute.cuda()
@@ -200,7 +218,8 @@ def make_loss_compute(model, tgt_vocab, opt):
 
 def train_model(model, fields, optim, data_type, model_opt):
     train_loss = make_loss_compute(model, fields["tgt"].vocab, opt)
-    valid_loss = make_loss_compute(model, fields["tgt"].vocab, opt)
+    valid_loss = make_loss_compute(model, fields["tgt"].vocab, opt,
+                                   train=False)
 
     trunc_size = opt.truncated_decoder  # Badly named...
     shard_size = opt.max_generator_batches
@@ -238,6 +257,9 @@ def train_model(model, fields, optim, data_type, model_opt):
         if opt.exp_host:
             train_stats.log("train", experiment, optim.lr)
             valid_stats.log("valid", experiment, optim.lr)
+        if opt.tensorboard:
+            train_stats.log_tensorboard("train", writer, optim.lr, epoch)
+            train_stats.log_tensorboard("valid", writer, optim.lr, epoch)
 
         # 4. Update the learning rate
         trainer.epoch_step(valid_stats.ppl(), epoch)
@@ -359,7 +381,7 @@ def build_optim(model, checkpoint):
             warmup_steps=opt.warmup_steps,
             model_size=opt.rnn_size)
 
-    optim.set_parameters(model.parameters())
+    optim.set_parameters(model.named_parameters())
 
     return optim
 
@@ -398,6 +420,10 @@ def main():
 
     # Do training.
     train_model(model, fields, optim, data_type, model_opt)
+
+    # If using tensorboard for logging, close the writer after training.
+    if opt.tensorboard:
+        writer.close()
 
 
 if __name__ == "__main__":
