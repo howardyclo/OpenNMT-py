@@ -32,6 +32,7 @@ def get_vocabs(dict_file):
 
 def get_embeddings(file, opt):
     embs = dict()
+    missing_count = 0
 
     for (i, l) in enumerate(open(file, 'rb')):
         if i < opt.skip_lines:
@@ -44,9 +45,13 @@ def get_embeddings(file, opt):
         l_split = l.decode('utf8').strip().split()
         if len(l_split) == 2:
             continue
-        embs[l_split[0]] = [float(em) for em in l_split[1:]]
-    print("Got {} embeddings from {}".format(len(embs), file))
-
+        try:
+            # Turns out that some elements in l_split[1:] are not floating numbers but string. (e.g. Glove embedding file)
+            embs[l_split[0]] = [float(em) for em in l_split[1:]]
+        except: missing_count += 1
+            
+    print("Got {} embeddings from {} (missing: {})".format(len(embs), file, missing_count))
+    
     return embs
 
 
